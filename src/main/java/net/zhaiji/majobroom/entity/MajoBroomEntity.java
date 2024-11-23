@@ -15,6 +15,7 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.phys.Vec3;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 import net.zhaiji.majobroom.MajoBroomConfig;
@@ -186,6 +187,7 @@ public class MajoBroomEntity extends Entity {
     @Override
     public InteractionResult interact(Player player, InteractionHand hand) {
         if (!player.isDiscrete() && this.canAddPassenger(this)) {
+            this.setDeltaMovement(Vec3.ZERO);
             if (!this.level().isClientSide) {
                 player.setYRot(this.getYRot());
                 player.startRiding(this);
@@ -233,8 +235,9 @@ public class MajoBroomEntity extends Entity {
     // 扫帚控制
     // 正是因为如此 有BUG啊有BUG!!!
     public void controlBroom() {
-        // 我写不来啊 谁来救救我
+        // 确保本地实例控制扫帚
         if (!this.isControlledByLocalInstance()) return;
+        // 如果有乘客在控制
         if (this.isVehicle()) {
             keyForward = keyForward();
             keyBack = keyBack();
@@ -243,63 +246,64 @@ public class MajoBroomEntity extends Entity {
             keyUp = keyUp();
             keyDown = keyDown();
 
-            // 移动逻辑
-            // 我没搞懂这个
+            // 同步玩家视角方向到扫帚
+            this.setYRot(this.getControllingPassenger().getYRot());
 
-            // 偏航角弧度
+            // 获取扫帚方向
             double yawRadians = Math.toRadians(this.getControllingPassenger().getYRot());
 
-            double moveX = 0;
-            double moveY = 0;
-            double moveZ = 0;
+            // 当前速度
+            double moveX = this.getDeltaMovement().x;
+            double moveY = this.getDeltaMovement().y;
+            double moveZ = this.getDeltaMovement().z;
 
+            // 推进力增量（加速度）
+            double forwardSpeed = 0.1 * MajoBroomConfig.Speed; // 前进速度 2倍
+            double backSpeed = 0.05 * MajoBroomConfig.Speed;    // 后退速度
+            double lateralSpeed = 0.05 * MajoBroomConfig.Speed; // 左右移动速度
+            double verticalSpeed = 0.05 * MajoBroomConfig.Speed; // 上下移动速度
+            double friction = 0.95; // 惯性摩擦系数（数值越小，惯性越强）
+
+            // 计算移动方向
             if (keyForward) {
-                moveX += Math.cos(yawRadians + Math.PI / 2) * 2;
-                moveZ += Math.sin(yawRadians + Math.PI / 2) * 2;
+                moveX += Math.cos(yawRadians + Math.PI / 2) * forwardSpeed;
+                moveZ += Math.sin(yawRadians + Math.PI / 2) * forwardSpeed;
             }
-
             if (keyBack) {
-                moveX -= Math.cos(yawRadians + Math.PI / 2);
-                moveZ -= Math.sin(yawRadians + Math.PI / 2);
+                moveX -= Math.cos(yawRadians + Math.PI / 2) * backSpeed;
+                moveZ -= Math.sin(yawRadians + Math.PI / 2) * backSpeed;
             }
-
             if (keyLeft) {
-                moveX += Math.cos(yawRadians);
-                moveZ += Math.sin(yawRadians);
+                moveX += Math.cos(yawRadians) * lateralSpeed;
+                moveZ += Math.sin(yawRadians) * lateralSpeed;
             }
-
             if (keyRight) {
-                moveX -= Math.cos(yawRadians);
-                moveZ -= Math.sin(yawRadians);
+                moveX -= Math.cos(yawRadians) * lateralSpeed;
+                moveZ -= Math.sin(yawRadians) * lateralSpeed;
             }
-
             if (keyUp) {
-                moveY += 1;
+                moveY += verticalSpeed;
             }
-
             if (keyDown) {
-                moveY -= 1;
+                moveY -= verticalSpeed;
             }
 
-            // 基础为0.3倍
-            moveX *= MajoBroomConfig.Speed;
-            moveY *= MajoBroomConfig.Speed;
-            moveZ *= MajoBroomConfig.Speed;
+            // 应用摩擦力（让速度逐渐衰减以模拟惯性）
+            moveX *= friction;
+            moveY *= friction;
+            moveZ *= friction;
 
-            // 应用上下漂浮
-            moveY += 0.08 * Math.sin(this.tickCount * Math.PI / 18);
+            // 加入上下漂浮效果
+            moveY += 0.01 * Math.sin(this.tickCount * Math.PI / 18);
 
+            // 设置新的移动速度 执行移动
             this.setDeltaMovement(moveX, moveY, moveZ);
-
-//            this.move(MoverType.SELF, this.getDeltaMovement());
-
-            // 同步玩家和扫帚的方向
-            this.setYRot(this.getControllingPassenger().getYRot());
+            this.move(MoverType.SELF, this.getDeltaMovement());
 
             return;
         }
-        // 如果没有乘客 并且不在地上
-        // 让他掉下来
+
+        // 如果没有乘客，并且不在地面，则让扫帚掉落
         if (!this.onGround()) {
             this.setDeltaMovement(0, -1.0f, 0);
             this.move(MoverType.SELF, this.getDeltaMovement());
