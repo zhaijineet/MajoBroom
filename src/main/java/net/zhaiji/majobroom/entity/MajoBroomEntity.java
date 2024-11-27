@@ -1,11 +1,11 @@
 package net.zhaiji.majobroom.entity;
 
-import com.mojang.logging.LogUtils;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.syncher.SynchedEntityData;
+import net.minecraft.util.Mth;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.damagesource.DamageSource;
@@ -20,8 +20,10 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 import net.zhaiji.majobroom.MajoBroomConfig;
 import net.zhaiji.majobroom.register.InitItem;
+import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
-import org.slf4j.Logger;
+
+import java.util.Objects;
 
 public class MajoBroomEntity extends Entity {
     public static final EntityType<MajoBroomEntity> TYPE = EntityType.Builder.<MajoBroomEntity>of(MajoBroomEntity::new, MobCategory.MISC)
@@ -29,7 +31,6 @@ public class MajoBroomEntity extends Entity {
             .sized(1.3f, 0.5f)
             .build("majo_broom");
 
-    public static final Logger LOGGER = LogUtils.getLogger();
 
     private boolean keyForward = false;
     private boolean keyBack = false;
@@ -44,6 +45,9 @@ public class MajoBroomEntity extends Entity {
     private double lerpZ;
     private double lerpYRot;
     private double lerpXRot;
+
+    // 添加旋转增量字段
+    private float deltaRotation;
 
     public MajoBroomEntity(EntityType<?> entityType, Level level) {
         super(entityType, level);
@@ -84,17 +88,17 @@ public class MajoBroomEntity extends Entity {
     }
 
     @Override
-    protected void defineSynchedData(SynchedEntityData.Builder builder) {
+    protected void defineSynchedData(SynchedEntityData.@NotNull Builder builder) {
 
     }
 
     @Override
-    protected void readAdditionalSaveData(CompoundTag compound) {
+    protected void readAdditionalSaveData(@NotNull CompoundTag compound) {
 
     }
 
     @Override
-    protected void addAdditionalSaveData(CompoundTag compound) {
+    protected void addAdditionalSaveData(@NotNull CompoundTag compound) {
 
     }
 
@@ -105,49 +109,55 @@ public class MajoBroomEntity extends Entity {
      */
     @Override
     public void lerpTo(double x, double y, double z, float yRot, float xRot, int steps) {
-        this.lerpX = x;
-        this.lerpY = y;
-        this.lerpZ = z;
-        this.lerpYRot = yRot;
-        this.lerpXRot = xRot;
-        this.lerpSteps = steps;
+        // 只在有乘客时进行lerp，否则保持原位
+        if (this.isVehicle()) {
+            this.lerpX = x;
+            this.lerpY = y;
+            this.lerpZ = z;
+            this.lerpYRot = yRot;
+            this.lerpXRot = xRot;
+            this.lerpSteps = steps;
+        }
+    }
+
+    private void tickLerp() {
+        // 只在有乘客时进行lerp
+        if (this.isVehicle()) {
+            if (this.isControlledByLocalInstance()) {
+                this.lerpSteps = 0;
+                this.syncPacketPositionCodec(this.getX(), this.getY(), this.getZ());
+            }
+
+            if (this.lerpSteps > 0) {
+                this.lerpPositionAndRotationStep(this.lerpSteps, this.lerpX, this.lerpY, this.lerpZ, this.lerpYRot, this.lerpXRot);
+                this.lerpSteps--;
+            }
+        }
     }
 
     @Override
     public double lerpTargetX() {
-        return this.lerpSteps > 0 ? this.lerpX : this.getX();
+        return this.isVehicle() && this.lerpSteps > 0 ? this.lerpX : this.getX();
     }
 
     @Override
     public double lerpTargetY() {
-        return this.lerpSteps > 0 ? this.lerpY : this.getY();
+        return this.isVehicle() && this.lerpSteps > 0 ? this.lerpY : this.getY();
     }
 
     @Override
     public double lerpTargetZ() {
-        return this.lerpSteps > 0 ? this.lerpZ : this.getZ();
+        return this.isVehicle() && this.lerpSteps > 0 ? this.lerpZ : this.getZ();
     }
 
     @Override
     public float lerpTargetXRot() {
-        return this.lerpSteps > 0 ? (float) this.lerpXRot : this.getXRot();
+        return this.isVehicle() && this.lerpSteps > 0 ? (float) this.lerpXRot : this.getXRot();
     }
 
     @Override
     public float lerpTargetYRot() {
-        return this.lerpSteps > 0 ? (float) this.lerpYRot : this.getYRot();
-    }
-
-    private void tickLerp() {
-        if (this.isControlledByLocalInstance()) {
-            this.lerpSteps = 0;
-            this.syncPacketPositionCodec(this.getX(), this.getY(), this.getZ());
-        }
-
-        if (this.lerpSteps > 0) {
-            this.lerpPositionAndRotationStep(this.lerpSteps, this.lerpX, this.lerpY, this.lerpZ, this.lerpYRot, this.lerpXRot);
-            this.lerpSteps--;
-        }
+        return this.isVehicle() && this.lerpSteps > 0 ? (float) this.lerpYRot : this.getYRot();
     }
 
     // 获取实体掉落物品
@@ -167,7 +177,7 @@ public class MajoBroomEntity extends Entity {
 
     // 是否可以添加乘客
     @Override
-    protected boolean canAddPassenger(Entity passenger) {
+    protected boolean canAddPassenger(@NotNull Entity passenger) {
         return this.getPassengers().isEmpty();
     }
 
@@ -177,17 +187,24 @@ public class MajoBroomEntity extends Entity {
         return !this.isRemoved();
     }
 
-    // 是否可以碰撞
+    // 是否可以碰
     @Override
     public boolean isPushable() {
-        return true;
+        return false; // 禁用所有碰撞
+    }
+
+    @Override
+    public void push(@NotNull Entity entity) {
+        // 如果推动者不是玩家，则允许碰撞
+        if (!(entity instanceof Player)) {
+            super.push(entity);
+        }
     }
 
     // 与扫帚交互
     @Override
-    public InteractionResult interact(Player player, InteractionHand hand) {
+    public @NotNull InteractionResult interact(Player player, @NotNull InteractionHand hand) {
         if (!player.isDiscrete() && this.canAddPassenger(this)) {
-            this.setDeltaMovement(Vec3.ZERO);
             if (!this.level().isClientSide) {
                 player.setYRot(this.getYRot());
                 player.startRiding(this);
@@ -204,7 +221,7 @@ public class MajoBroomEntity extends Entity {
      * 删除实体并给予玩家对应掉落物
      */
     @Override
-    public boolean hurt(DamageSource source, float amount) {
+    public boolean hurt(@NotNull DamageSource source, float amount) {
         if (this.level().isClientSide || this.isRemoved()) {
             return true;
         } else if (this.isInvulnerableTo(source)) {
@@ -223,22 +240,22 @@ public class MajoBroomEntity extends Entity {
 
     // 无摔落伤害
     @Override
-    public boolean causeFallDamage(float pFallDistance, float pMultiplier, DamageSource pSource) {
+    public boolean causeFallDamage(float pFallDistance, float pMultiplier, @NotNull DamageSource pSource) {
         return false;
     }
 
     @Override
-    protected void checkFallDamage(double pY, boolean pOnGround, BlockState pState, BlockPos pPos) {
+    protected void checkFallDamage(double pY, boolean pOnGround, @NotNull BlockState pState, @NotNull BlockPos pPos) {
         this.resetFallDistance();
     }
 
     // 扫帚控制
     // 正是因为如此 有BUG啊有BUG!!!
     public void controlBroom() {
-        // 确保本地实例控制扫帚
-        if (!this.isControlledByLocalInstance()) return;
-        // 如果有乘客在控制
         if (this.isVehicle()) {
+            // 只在有乘客时才检查本地控制
+            if (!this.isControlledByLocalInstance()) return;
+            
             keyForward = keyForward();
             keyBack = keyBack();
             keyLeft = keyLeft();
@@ -247,7 +264,7 @@ public class MajoBroomEntity extends Entity {
             keyDown = keyDown();
 
             // 同步玩家视角方向到扫帚
-            this.setYRot(this.getControllingPassenger().getYRot());
+            this.setYRot(Objects.requireNonNull(this.getControllingPassenger()).getYRot());
 
             // 获取扫帚方向
             double yawRadians = Math.toRadians(this.getControllingPassenger().getYRot());
@@ -300,13 +317,20 @@ public class MajoBroomEntity extends Entity {
             this.setDeltaMovement(moveX, moveY, moveZ);
             this.move(MoverType.SELF, this.getDeltaMovement());
 
-            return;
-        }
-
-        // 如果没有乘客，并且不在地面，则让扫帚掉落
-        if (!this.onGround()) {
-            this.setDeltaMovement(0, -1.0f, 0);
-            this.move(MoverType.SELF, this.getDeltaMovement());
+        } else {
+            // 没有乘客时的行为，不需要检查isControlledByLocalInstance
+            if (!this.onGround()) {
+                Vec3 motion = this.getDeltaMovement();
+                this.setDeltaMovement(
+                    motion.x * 0.98,
+                    -0.1,           // 固定下落速度
+                    motion.z * 0.98
+                );
+                this.move(MoverType.SELF, this.getDeltaMovement());
+            } else {
+                this.setDeltaMovement(Vec3.ZERO);
+                this.move(MoverType.SELF, this.getDeltaMovement());
+            }
         }
     }
 
@@ -315,5 +339,84 @@ public class MajoBroomEntity extends Entity {
         super.tick();
         this.tickLerp();
         this.controlBroom();
+    }
+
+    @Override
+    protected void removePassenger(@NotNull Entity passenger) {
+        // 保存当前位置和动量
+        double x = this.getX();
+        double y = this.getY();
+        double z = this.getZ();
+        Vec3 currentMotion = this.getDeltaMovement();
+        
+        super.removePassenger(passenger);
+        
+        // 恢复扫帚位置和动量，确保它留在原地
+        this.setPos(x, y, z);
+        this.setDeltaMovement(currentMotion);
+        
+        // 玩家侧方下车
+        double angle = Math.toRadians(this.getYRot() + 180);
+        double offset = 2.0;
+        
+        passenger.setPos(
+            x + Math.cos(angle) * offset,
+            y,
+            z + Math.sin(angle) * offset
+        );
+        
+        // 重置玩家的移动状态
+        passenger.setDeltaMovement(Vec3.ZERO);
+        passenger.resetFallDistance();
+    }
+
+
+    // 玩家实体和扫帚实体乘坐之间的距离
+    @Override
+    protected @NotNull Vec3 getPassengerAttachmentPoint(@NotNull Entity passenger, @NotNull EntityDimensions dimensions, float partialTick) {
+        return new Vec3(
+            0.0D,                    // 水平前后偏移
+            -0.15D,                   // 固定的垂直偏移，使用负值让玩家坐得更低（控制距离修改这个）
+            0.0D                     // 水平左右偏移
+        ).yRot(-this.getYRot() * ((float)Math.PI / 180F));
+    }
+
+    @Override
+    protected void positionRider(@NotNull Entity passenger, Entity.@NotNull MoveFunction moveFunction) {
+        if (this.hasPassenger(passenger)) {
+            EntityDimensions dimensions = passenger.getDimensions(passenger.getPose());
+            Vec3 attachmentPoint = this.getPassengerAttachmentPoint(passenger, dimensions, 1.0F);
+            
+            moveFunction.accept(passenger,
+                this.getX() + attachmentPoint.x,
+                this.getY() + attachmentPoint.y,
+                this.getZ() + attachmentPoint.z
+            );
+            
+            // 同步乘客旋转
+            passenger.setYRot(passenger.getYRot() + this.deltaRotation);
+            passenger.setYHeadRot(passenger.getYHeadRot() + this.deltaRotation);
+            this.clampRotation(passenger);
+        }
+    }
+
+    protected void clampRotation(Entity entityToUpdate) {
+        entityToUpdate.setYBodyRot(this.getYRot());
+        float f = Mth.wrapDegrees(entityToUpdate.getYRot() - this.getYRot());
+        float f1 = Mth.clamp(f, -105.0F, 105.0F);
+        entityToUpdate.yRotO += f1 - f;
+        entityToUpdate.setYRot(entityToUpdate.getYRot() + f1 - f);
+        entityToUpdate.setYHeadRot(entityToUpdate.getYRot());
+    }
+
+    @Override
+    public void onPassengerTurned(@NotNull Entity entityToUpdate) {
+        this.clampRotation(entityToUpdate);
+    }
+
+    // 在移动相关方法中添加锁定检查
+    @Override
+    public void move(@NotNull MoverType moveType, @NotNull Vec3 movement) {
+        super.move(moveType, movement);
     }
 }
